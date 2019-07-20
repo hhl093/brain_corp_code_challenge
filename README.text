@@ -9,3 +9,7 @@ Install:
 
 Run:
 'npm start'
+
+The port is listening to default 3000, all the specified functions can be access through localhost.
+ex.
+ 'http://localhost:3000/groups/query?name=docker'
