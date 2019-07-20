@@ -1,6 +1,7 @@
 const sqlite3 = require('sqlite3').verbose()
+const logger = require('../logger')
 
-let db = new sqlite3.Database('./password.db', err => {
+let db = new sqlite3.Database('password.db', err => {
   if (err) {
     console.error(err.message)
   }
@@ -18,6 +19,84 @@ db.get = function(query) {
       }
     })
   })
+}
+
+//helper functions to check empty object
+function isEmpty(obj) {
+  if (!obj) {
+    return true
+  } else if (obj.length == 0 || Object.keys(obj).length == 0) {
+    return true
+  } else {
+    return false
+  }
+}
+
+//helper function to always return array of one object or array
+function toArray(obj) {
+  if (Array.isArray(obj)) {
+    return obj
+  } else {
+    return [obj]
+  }
+}
+
+// helper to create string for querying gids from name or gid
+function getSelectFieldGroupString(name, gid) {
+  let first = true
+  let base = `
+  SELECT
+    gid
+  FROM
+    GROUPS
+  WHERE `
+
+  if (name) {
+    base += first ? `name = '${name}'` : `OR name = '${name}'`
+    first = false
+  }
+  if (gid) {
+    base += first ? `gid = '${gid}'` : `OR gid = '${gid}'`
+    first = false
+  }
+
+  base += `;`
+
+  console.log(base)
+
+  return base
+}
+
+//get all the groups with given members
+function getGidFromMembers(memList) {
+  let first = true
+  let base = `
+  SELECT
+    gid
+  FROM
+    MEMBERS
+  WHERE `
+
+  memList.forEach(function(name) {
+    base += first ? `member = '${name}'` : `OR member = '${name}'`
+    first = false
+  }, this)
+  base += `;`
+  return base
+}
+
+//helper function to get members from a single gid
+const GET_MEMBERS = gid => `SELECT member FROM MEMBERS
+           WHERE gid = ${gid};`
+
+async function getMember(gid) {
+  const queryString = GET_MEMBERS(gid)
+  try {
+    const rows = await db.get(queryString)
+    return rows
+  } catch (err) {
+    throw err
+  }
 }
 
 const allUser = `SELECT * FROM PASSWORD
@@ -70,55 +149,42 @@ const GET_GROUP_QUERY = gid => `SELECT * FROM GROUPS
 
 const GET_ALL_GROUP = `SELECT * FROM GROUPS`
 
+const GET_ALL_GID_FROM_NAME = name =>
+  `SELECT gid, name FROM MEMBERS WHERE member = '${name}';`
+
 const MEMBERS_FROM_GID = gid => `SELECT * FROM MEMBERS
            WHERE uid = ${gid};`
 
-const GID_NAME_FROM_UID = uid => `SELECT  name, gid FROM GROUPS
+const GID_NAME_FROM_UID = uid => `SELECT  name, gid FROM PASSWORD
            WHERE uid = ${uid};`
 
-const getUsers = (request, response) => {
+const GET_NAME_GID = gid => `SELECT name, gid FROM GROUPS
+           WHERE gid = ${gid};`
+
+//return all users
+const getUsers = async (request, response) => {
   console.log('getUsers')
-  db.all(allUser, [], (err, rows) => {
-    if (err) {
-      throw err
+
+  try {
+    const result = await db.get(allUser)
+    if (isEmpty(result)) {
+      response.status(404).json('404 result not found')
+    } else {
+      response.status(200).json(result)
     }
-    response.status(200).json(rows)
-  })
+  } catch (err) {
+    logger.error(err)
+    response.status(500).json('internal error')
+  }
 }
 
-const getGroupsUsers = async (request, response) => {
-  console.log('gggg reflect', request.params.uid)
-  console.log(GID_NAME_FROM_UID(request.params.uid))
+const getUserQuery = async (request, response) => {
+  console.log('getUserQuery')
 
-  const gids = await db.get(GID_NAME_FROM_UID(request.params.uid))
+  if (isEmpty(request.query)) {
+    return response.status(404).json('404 result not found')
+  }
 
-  if (gids.length === 0) response.status(404).json('404 result not found')
-
-  console.log(gids, 'this is gidddds')
-
-  const result = await Promise.all(
-    gids.map(async gidName => {
-      var members = await getMember(gidName.gid)
-      members = members.map(m => m.member)
-
-      return { ...gidName, members: members }
-    })
-  )
-
-  response.status(200).json(result)
-}
-
-const query = (request, response) => {
-  console.log(request.query.id, 'this is id ddd here')
-  db.all(allUser, [], (err, rows) => {
-    if (err) {
-      throw err
-    }
-    response.status(200).json(rows)
-  })
-}
-
-const lookup = (request, response) => {
   const queryString = getSelectFieldString(
     request.query.name,
     request.query.uid,
@@ -127,228 +193,195 @@ const lookup = (request, response) => {
     request.query.home,
     request.query.shell
   )
-  console.log(queryString)
+  logger.debug(queryString)
 
-  db.all(queryString, [], (err, rows) => {
-    if (err) {
-      throw err
-    }
-    response.status(200).json(rows)
-  })
-}
-
-const uidLookUp = (request, response) => {
-  const queryString = GET_UID_QUERY(request.params.uid)
-  db.all(queryString, [], (err, rows) => {
-    if (err) {
-      throw err
-    }
-
-    if (rows.length === 0) {
+  try {
+    const result = await db.get(queryString)
+    if (isEmpty(result)) {
       response.status(404).json('404 result not found')
     } else {
-      console.log('hreeeee')
-      console.log(rows)
-      response.status(200).json(rows)
+      response.status(200).json(toArray(result))
     }
-  })
-}
-
-const allGroups = async (request, response) => {
-  var allGroups = await db.get(GET_ALL_GROUP)
-
-  console.log(allGroups)
-  const result = await Promise.all(
-    allGroups.map(async IdName => {
-      console.log(IdName)
-      var members = await getMember(IdName.gid)
-      members = members.map(m => m.member)
-      console.log(members)
-      console.log({ ...IdName, members: members })
-
-      return { ...IdName, members: members }
-    })
-  )
-
-  console.log(result, 'all groups')
-
-  response.status(200).json(result)
-}
-
-const GET_MEMBERS = gid => `SELECT member FROM MEMBERS
-           WHERE gid = ${gid};`
-
-const GET_NAME_GID = gid => `SELECT name, gid FROM GROUPS
-           WHERE gid = ${gid};`
-
-async function getMember(gid) {
-  const queryString = GET_MEMBERS(gid)
-  const rows = await db.get(queryString)
-  return rows
-}
-
-const gidLookUp = async (request, response) => {
-  console.log('gidLookUp')
-  const queryString = GET_GROUP_QUERY(request.params.gid)
-  const memberQueryString = GET_MEMBERS(request.params.gid)
-
-  var memberList = await getMember(request.params.gid)
-  var gidAndName = await db.get(queryString)
-
-  memberList = memberList.map(m => m.member)
-
-  console.log(gidAndName, 'hhhhhh')
-
-  if (gidAndName.length === 0) response.status(404).json('404 result not found')
-
-  var result
-  if (memberList.length === 0) {
-    result = { ...gidAndName[0] }
-  } else {
-    result = { ...gidAndName[0], members: memberList }
+  } catch (err) {
+    logger.error(err)
+    response.status(500).json('internal error')
   }
-
-  response.status(200).json(result)
 }
 
-function getSelectFieldGroupString(name, gid) {
-  let first = true
-  let base = `
-  SELECT
-    gid
-  FROM
-    GROUPS
-  WHERE `
-
-  if (name) {
-    base += first ? `name = '${name}'` : `AND name = '${name}'`
-    first = false
-  }
-  if (gid) {
-    base += first ? `gid = '${gid}'` : `AND gid = '${gid}'`
-    first = false
-  }
-
-  base += `;`
-
-  console.log(base)
-
-  return base
-}
-
-function getMembersString(member) {
-  let first = true
-  let base = `
-  SELECT
-    *
-  FROM
-    MEMBERS
-  WHERE `
-
-  member.array.forEach(function(element) {
-    console.log(element)
-  }, this)
-}
-
-function getGidFromMembers(memList) {
-  let first = true
-  let base = `
-  SELECT
-    gid
-  FROM
-    MEMBERS
-  WHERE `
-
-  memList.forEach(function(name) {
-    base += first ? `member = '${name}'` : `OR member = '${name}'`
-    first = false
-  }, this)
-  base += `;`
-  return base
-}
-
-const groupsLookUp = async (request, response) => {
-  console.log('groupsLookUp')
-
-  var gidQueryString = ''
-
-  if (request.query.name || request.query.gid) {
-    gidQueryString = getSelectFieldGroupString(
-      request.query.name,
-      request.query.gid
-    )
-    var gidResult = await db.get(gidQueryString)
-  }
-  var memList = request.query.member
-
-  console.log(gidResult, 'gid result')
-
-  if (
-    (!gidResult || gidResult.length === 0) &&
-    (!memList || memList.length === 0)
-  ) {
-    response.status(404).json('404 result not found')
-  }
-
-  var finalGids = []
-
-  var gidFromMember = []
-
-  if (memList && memList.length > 0) {
-    console.log(typeof memList, memList.length)
-    if (typeof memList == 'string') {
-      memList = [memList]
+const getUserUid = async (request, response) => {
+  console.log('getUserUid')
+  const queryString = GET_UID_QUERY(request.params.uid)
+  logger.debug(queryString)
+  try {
+    const result = await db.get(queryString)
+    if (isEmpty(result)) {
+      response.status(404).json('404 result not found')
+    } else {
+      response.status(200).json(result[0])
     }
-
-    const queryString = getGidFromMembers(memList)
-    var gidFromMember = await db.get(queryString)
+  } catch (err) {
+    logger.error(err)
+    response.status(500).json('internal error')
   }
+}
 
-  console.log(gidFromMember, 'result here eee')
+const getGroupsUsers = async (request, response) => {
+  console.log('getGroupsUsers')
+  logger.debug(GID_NAME_FROM_UID(request.params.uid))
 
-  if (gidResult && gidResult.length > 0) {
-    gidResult.forEach(function(gidObj) {
-      finalGids.push(gidObj.gid)
-    }, this)
-  }
+  try {
+    const nameGid = await db.get(GID_NAME_FROM_UID(request.params.uid))
+    const name = nameGid[0].name
+    logger.debug(name, 'name from gid')
+    console.log(GET_ALL_GID_FROM_NAME(name))
 
-  if (gidFromMember.length > 0) {
-    gidFromMember.forEach(function(gidObj) {
-      finalGids.push(gidObj.gid)
-    }, this)
-  }
+    const allGids = await db.get(GET_ALL_GID_FROM_NAME(name))
 
-  // result = result.append(gidResult)
-  console.log(finalGids)
+    logger.debug(JSON.stringify(allGids))
 
-  if (finalGids.length > 0) {
-    const gidMembers = await Promise.all(
-      finalGids.map(async gid => {
-        var members = await getMember(gid)
-        var nameGids = await db.get(GET_NAME_GID(gid))
-        console.log(nameGids)
+    const result = await Promise.all(
+      allGids.map(async gidName => {
+        var members = await getMember(gidName.gid)
         members = members.map(m => m.member)
-
-        return { ...nameGids[0], members: members }
+        return { ...gidName, members: members }
       })
     )
 
-    response.status(200).json(gidMembers)
-  } else {
-    response.status(404).json('404 result not found')
+    response.status(200).json(result)
+  } catch (err) {
+    logger.error(err)
+    response.status(500).json('internal error')
   }
+}
 
-  //   var gids = await db.get(queryString)
-  //   response.status(200).json([])
+const getGroups = async (request, response) => {
+  try {
+    console.log('getGroups')
+
+    var allGroups = await db.get(GET_ALL_GROUP)
+
+    console.log(allGroups)
+    const result = await Promise.all(
+      allGroups.map(async IdName => {
+        logger.debug(JSON.stringify(IdName))
+        var members = await getMember(IdName.gid)
+        members = members.map(m => m.member)
+        logger.debug(members)
+        logger.debug(JSON.stringify({ ...IdName, members: members }))
+
+        return { ...IdName, members: members }
+      })
+    )
+    response.status(200).json(result)
+  } catch (err) {
+    logger.error(err)
+    response.status(500).json('internal error')
+  }
+}
+
+const getGidGroup = async (request, response) => {
+  try {
+    console.log('getGidGroup')
+    if (isNaN(request.params.gid))
+      return response.status(404).json('404 result not found')
+
+    const queryString = GET_GROUP_QUERY(request.params.gid)
+    const memberQueryString = GET_MEMBERS(request.params.gid)
+
+    var memberList = await getMember(request.params.gid)
+    var gidAndName = await db.get(queryString)
+
+    memberList = memberList.map(m => m.member)
+
+    logger.debug(JSON.stringify(gidAndName))
+
+    if (gidAndName.length === 0)
+      response.status(404).json('404 result not found')
+
+    var result
+    if (memberList.length === 0) {
+      result = { ...gidAndName[0] }
+    } else {
+      result = { ...gidAndName[0], members: memberList }
+    }
+
+    response.status(200).json(result)
+  } catch (err) {
+    logger.error(err)
+    response.status(500).json('404 result not found')
+  }
+}
+
+const getGroupQuery = async (request, response) => {
+  console.log('groupsLookUp')
+
+  try {
+    var finalGids = []
+
+    if (request.query.name || request.query.gid) {
+      gidQueryString = getSelectFieldGroupString(
+        request.query.name,
+        request.query.gid
+      )
+      var gidFromName = await db.get(gidQueryString)
+      logger.debug(JSON.stringify(gidFromName))
+    }
+    if (gidFromName) finalGids = finalGids.concat(gidFromName)
+
+    logger.debug(JSON.stringify(finalGids))
+
+    var memList = request.query.member
+
+    if (memList && memList.length > 0) {
+      if (typeof memList == 'string') {
+        memList = [memList]
+      }
+
+      const queryString = getGidFromMembers(memList)
+      var gidFromMember = await db.get(queryString)
+    }
+
+    logger.debug(JSON.stringify(gidFromMember))
+
+    if (gidFromMember) finalGids = finalGids.concat(gidFromMember)
+
+    finalGids = finalGids
+      .map(gidObj => gidObj.gid)
+      .filter((v, i, a) => a.indexOf(v) === i)
+
+    logger.debug(JSON.stringify(finalGids))
+
+    if (finalGids.length > 0) {
+      const gidMembers = await Promise.all(
+        finalGids.map(async gid => {
+          var members = await getMember(gid)
+          logger.debug(JSON.stringify(members))
+
+          var nameGids = await db.get(GET_NAME_GID(gid))
+          logger.debug(JSON.stringify(nameGids))
+
+          members = members.map(m => m.member)
+
+          return { ...nameGids[0], members: members }
+        })
+      )
+
+      response.status(200).json(gidMembers)
+    } else {
+      response.status(404).json('404 result not found')
+    }
+  } catch (err) {
+    logger.error(err)
+    response.status(500).json('internal error')
+  }
 }
 
 module.exports = {
   getUsers,
-  query,
-  lookup,
-  uidLookUp,
-  gidLookUp,
-  allGroups,
+  getUserQuery,
+  getUserUid,
+  getGidGroup,
+  getGroups,
   getGroupsUsers,
-  groupsLookUp
+  getGroupQuery
 }

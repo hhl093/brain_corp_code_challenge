@@ -1,0 +1,11 @@
+This is a simple app to demonstrate the get function specified by the document
+
+Sqlite3 is chosen for easy file read and write. A simple logger is also created to log the error in error.log 
+in production environment. The app uses express framework with various libaraies that support sqlite database,
+logging, and formatting.
+
+Install:
+'npm install' at root directory
+
+Run:
+'npm start'
